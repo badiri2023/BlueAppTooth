@@ -36,25 +36,23 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // 1. Configurar RecyclerView
+        // RecyclerView
         rvDispositivos = findViewById(R.id.rvDispositivos)
         rvDispositivos.layoutManager = LinearLayoutManager(this)
 
-        // 2. Inicializar Bluetooth
+        // Inicializar Bluetooth
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        // Nota: en algunos dispositivos antiguos adapter puede ser null si no tienen BT
         if (bluetoothManager.adapter == null) {
             Toast.makeText(this, "Este dispositivo no tiene Bluetooth", Toast.LENGTH_LONG).show()
             return
         }
         bluetoothAdapter = bluetoothManager.adapter
-
-        // 3. Comprobar y Pedir Permisos o Cargar Lista
+        // Comprobar y Pedir Permisos o Cargar Lista
         checkPermissionsAndLoad()
     }
 
     private fun checkPermissionsAndLoad() {
-        // En Android 12 (S) o superior, necesitamos el permiso BLUETOOTH_CONNECT
+        // Permiso BLUETOOTH_CONNECT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 // Si no tenemos permiso, lo pedimos
@@ -72,7 +70,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // --- AQUÍ OBTENEMOS LOS DATOS REALES ---
+        // --- OBTENEMOS LOS DATOS ---
         val pairedDevices = bluetoothAdapter.bondedDevices // Dispositivos emparejados
         val listaVisual = mutableListOf<DispositivoBluetooth>()
 
@@ -103,7 +101,7 @@ class MainActivity : AppCompatActivity() {
         builder.setPositiveButton("Cerrar") { dialog, _ ->
             dialog.dismiss()
         }
-        // Botón opcional para conectar (lógica no implementada, solo visual)
+        // Botón opcional para conectar
         builder.setNeutralButton("Conectar") { _, _ ->
             Toast.makeText(this, "Intentando conectar con ${device.nombre}...", Toast.LENGTH_SHORT).show()
         }
