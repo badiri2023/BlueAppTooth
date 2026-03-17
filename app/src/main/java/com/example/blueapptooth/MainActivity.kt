@@ -1,111 +1,132 @@
 package com.example.blueapptooth
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothManager
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.io.File
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), BLEconnDialog.BLEConnectionCallback {
 
     private lateinit var rvDispositivos: RecyclerView
-    private lateinit var bluetoothAdapter: BluetoothAdapter
+    private lateinit var adapter: DispositivosAdapter
+    // Unificamos la lista al tipo DispositivoBluetooth
+    private val listaParaMostrar = mutableListOf<DispositivoBluetooth>()
 
-    // ESTO GESTIONA LA RESPUESTA DEL USUARIO CUANDO PIDE PERMISOS
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            // Si el usuario acepta, cargamos la lista. Si no, mostramos aviso.
-            if (permissions.all { it.value }) {
-                cargarDispositivos()
-            } else {
-                Toast.makeText(this, "Se necesitan permisos para ver los dispositivos", Toast.LENGTH_LONG).show()
-            }
-        }
+    private val REQUEST_CODE_PERMISSIONS = 123
+    private var bleDialog: BLEconnDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // RecyclerView
+        // 1. Inicializar UI
         rvDispositivos = findViewById(R.id.rvDispositivos)
         rvDispositivos.layoutManager = LinearLayoutManager(this)
 
-        // Inicializar Bluetooth
-        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        if (bluetoothManager.adapter == null) {
-            Toast.makeText(this, "Este dispositivo no tiene Bluetooth", Toast.LENGTH_LONG).show()
-            return
+        // Inicializamos el adapter una sola vez
+        adapter = DispositivosAdapter(listaParaMostrar) { item ->
+            showBLEDialog(item.device) // Usamos el objeto BluetoothDevice interno
         }
-        bluetoothAdapter = bluetoothManager.adapter
-        // Comprobar y Pedir Permisos o Cargar Lista
+        rvDispositivos.adapter = adapter
+
+        // 2. Comprobar permisos y cargar dispositivos
         checkPermissionsAndLoad()
     }
 
     private fun checkPermissionsAndLoad() {
-        // Permiso BLUETOOTH_CONNECT
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                // Si no tenemos permiso, lo pedimos
-                requestPermissionLauncher.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT))
-                return
-            }
+        val permisos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+        } else {
+            arrayOf(Manifest.permission.BLUETOOTH, Manifest.permission.ACCESS_FINE_LOCATION)
         }
-        // Si estamos en Android antiguo o ya tenemos permiso:
-        cargarDispositivos()
+
+        val faltanPermisos = permisos.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (faltanPermisos.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, faltanPermisos.toTypedArray(), REQUEST_CODE_PERMISSIONS)
+        } else {
+            cargarDispositivosEmparejados()
+        }
     }
 
-    private fun cargarDispositivos() {
-        // Verificación de seguridad redundante para que Android Studio no marque error en rojo
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    @SuppressLint("MissingPermission")
+    private fun cargarDispositivosEmparejados() {
+        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val bluetoothAdapter = bluetoothManager.adapter
+
+        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
+            Toast.makeText(this, "Por favor, activa el Bluetooth", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // --- OBTENEMOS LOS DATOS ---
-        val pairedDevices = bluetoothAdapter.bondedDevices // Dispositivos emparejados
-        val listaVisual = mutableListOf<DispositivoBluetooth>()
+        listaParaMostrar.clear()
 
-        if (pairedDevices.isNullOrEmpty()) {
-            Toast.makeText(this, "No hay dispositivos emparejados", Toast.LENGTH_SHORT).show()
-        } else {
-            pairedDevices.forEach { device ->
-                val nombre = device.name ?: "Dispositivo Desconocido"
-                val mac = device.address
-                listaVisual.add(DispositivoBluetooth(nombre, mac))
-            }
+        // Obtenemos los dispositivos vinculados del sistema
+        val bondedDevices = bluetoothAdapter.bondedDevices
+        for (device in bondedDevices) {
+            // Creamos nuestro objeto de "envoltura" para el RecyclerView
+            val nuevoItem = DispositivoBluetooth(
+                nombre = device.name ?: "Desconocido",
+                macAddress = device.address,
+                device = device
+            )
+            listaParaMostrar.add(nuevoItem)
         }
 
-        // --- CONECTAMOS CON EL ADAPTER ---
-        val adapter = DispositivosAdapter(listaVisual) { dispositivo ->
-            // Esta es la función lambda que se ejecuta al hacer CLICK
-            mostrarDialogo(dispositivo)
-        }
-
-        rvDispositivos.adapter = adapter
+        // Notificamos al adapter que los datos han cambiado
+        adapter.notifyDataSetChanged()
     }
 
-    private fun mostrarDialogo(device: DispositivoBluetooth) {
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle(device.nombre)
-        builder.setMessage("Dirección MAC:\n${device.macAddress}\n\nEstado:\nEmparejado en el sistema")
-        builder.setIcon(R.drawable.baseline_bluetooth_24) // Usamos el mismo icono
-        builder.setPositiveButton("Cerrar") { dialog, _ ->
-            dialog.dismiss()
-        }
-        // Botón opcional para conectar
-        builder.setNeutralButton("Conectar") { _, _ ->
-            Toast.makeText(this, "Intentando conectar con ${device.nombre}...", Toast.LENGTH_SHORT).show()
-        }
+    private fun showBLEDialog(device: BluetoothDevice) {
+        // Lanzamos el diálogo que gestiona la conexión GATT
+        bleDialog = BLEconnDialog(this, device, this)
+        bleDialog?.show()
+    }
 
-        builder.create().show()
+    // --- Implementación de Callbacks del Diálogo ---
+
+    override fun onConnectionSuccess(gatt: BluetoothGatt) {
+        // Aquí podrías hacer algo extra si quisieras,
+        // pero el diálogo ya muestra "Conectado"
+    }
+
+    override fun onConnectionFailed(error: String) {
+        runOnUiThread {
+            Toast.makeText(this, "Error: $error", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onConnectionCancelled() {
+        runOnUiThread {
+            Toast.makeText(this, "Conexión cancelada", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onReceivedImage(file: File) {
+        runOnUiThread {
+            Toast.makeText(this, "¡Imagen guardada: ${file.name}!", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_PERMISSIONS && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+            cargarDispositivosEmparejados()
+        }
     }
 }
